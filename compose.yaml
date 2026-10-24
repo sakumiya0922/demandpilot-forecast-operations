@@ -21,9 +21,9 @@ services:
     environment:
       DATABASE_URL: postgresql://demandpilot:local_only@db:5432/demandpilot
     volumes:
-      - ./01_data/storage:/app/01_data/storage
-      - ./02_model/mlflow:/app/02_model/mlflow
-      - ./02_model/results:/app/02_model/results
+      - ./01_data/storage:/app/01_data/storage:${STORAGE_MODE:-rw}
+      - ${MLFLOW_DIR:-./02_model/mlflow}:/app/02_model/mlflow
+      - ${RESULTS_DIR:-./02_model/results}:/app/02_model/results
     depends_on:
       db:
         condition: service_healthy
@@ -33,7 +33,7 @@ services:
     build: .
     profiles: ["tools"]
     volumes:
-      - ./02_model/mlflow:/app/02_model/mlflow
+      - ${MLFLOW_DIR:-./02_model/mlflow}:/app/02_model/mlflow
     ports:
       - "127.0.0.1:5002:5000"
     command: ["mlflow", "server", "--backend-store-uri", "sqlite:////app/02_model/mlflow/mlflow.db", "--default-artifact-root", "file:///app/02_model/mlflow/artifacts", "--host", "0.0.0.0", "--port", "5000", "--workers", "1"]
@@ -50,7 +50,7 @@ services:
       MLFLOW_UI_URL: http://localhost:5002
     volumes:
       - ./01_data/storage:/app/01_data/storage:ro
-      - ./02_model/mlflow:/app/02_model/mlflow:ro
+      - ${MLFLOW_DIR:-./02_model/mlflow}:/app/02_model/mlflow:ro
     ports:
       - "127.0.0.1:8503:8501"
     depends_on:
