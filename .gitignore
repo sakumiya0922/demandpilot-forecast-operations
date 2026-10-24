@@ -1,0 +1,53 @@
+# Secrets, environment and temporary files
+.env
+.env.*
+!.env.example
+.venv/
+__pycache__/
+.pytest_cache/
+*.pyc
+.DS_Store
+*.log
+# Raw data, model files and MLflow database
+01_data/storage/*
+!01_data/storage/.gitkeep
+02_model/mlflow/*
+!02_model/mlflow/.gitkeep
+# Output reports from new executions
+02_model/results/*
+!02_model/results/.gitkeep
+
+# Generated data and reports (keep existing files locally)
+*.csv
+*.tsv
+*.xlsx
+*.xls
+*.parquet
+*.zip
+*.db
+*.db-*
+*.sqlite*
+*.pkl
+*.pickle
+*.joblib
+*.lgb
+*.lgbm
+*.model
+02_model/evaluation/results/
+05_docs/analysis_results/
+05_docs/evaluation_results/
+05_docs/reproducibility/
+# Local credentials and temporary files
+.aws/
+.gcloud/
+credentials*.json
+*service-account*.json
+*.pem
+*.key
+*.p12
+*.tmp
+*.swp
+*.swo
+*~
+.coverage
+htmlcov/

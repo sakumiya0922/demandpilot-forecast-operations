@@ -1,0 +1,10 @@
+.git
+.env
+.venv
+__pycache__
+*.pyc
+01_data/storage
+02_model/mlflow
+02_model/results
+05_docs
+.DS_Store

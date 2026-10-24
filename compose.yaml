@@ -1,0 +1,62 @@
+name: demandpilot
+services:
+  db:
+    image: postgres:16.8-bookworm
+    environment:
+      POSTGRES_DB: demandpilot
+      POSTGRES_USER: demandpilot
+      POSTGRES_PASSWORD: local_only
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./01_data/preparation/schema.sql:/docker-entrypoint-initdb.d/001-schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U demandpilot -d demandpilot"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  pipeline:
+    build: .
+    profiles: ["tools"]
+    environment:
+      DATABASE_URL: postgresql://demandpilot:local_only@db:5432/demandpilot
+    volumes:
+      - ./01_data/storage:/app/01_data/storage
+      - ./02_model/mlflow:/app/02_model/mlflow
+      - ./02_model/results:/app/02_model/results
+    depends_on:
+      db:
+        condition: service_healthy
+    command: ["python", "-m", "daily.daily_batch", "--help"]
+
+  mlflow:
+    build: .
+    profiles: ["tools"]
+    volumes:
+      - ./02_model/mlflow:/app/02_model/mlflow
+    ports:
+      - "127.0.0.1:5002:5000"
+    command: ["mlflow", "server", "--backend-store-uri", "sqlite:////app/02_model/mlflow/mlflow.db", "--default-artifact-root", "file:///app/02_model/mlflow/artifacts", "--host", "0.0.0.0", "--port", "5000", "--workers", "1"]
+
+  dashboard:
+    build: .
+    profiles: ["tools"]
+    environment:
+      DATABASE_URL: postgresql://demandpilot:local_only@db:5432/demandpilot
+      PGOPTIONS: "-c default_transaction_read_only=on"
+      PYTHONPATH: /app/01_data:/app/02_model:/app/03_app:/app
+      SOURCE_DIR: /app/01_data/storage/daily
+      MLFLOW_DATA_DIR: /app/02_model/mlflow
+      MLFLOW_UI_URL: http://localhost:5002
+    volumes:
+      - ./01_data/storage:/app/01_data/storage:ro
+      - ./02_model/mlflow:/app/02_model/mlflow:ro
+    ports:
+      - "127.0.0.1:8503:8501"
+    depends_on:
+      db:
+        condition: service_healthy
+    command: ["streamlit", "run", "03_app/app.py", "--server.address=0.0.0.0", "--server.port=8501", "--server.headless=true", "--browser.gatherUsageStats=false", "--theme.base=light", "--theme.primaryColor=#25496e", "--theme.backgroundColor=#ffffff", "--theme.secondaryBackgroundColor=#f7f8fa", "--theme.textColor=#1c3049"]
+
+volumes:
+  postgres_data:
