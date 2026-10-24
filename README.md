@@ -17,16 +17,17 @@
 ## 処理の全体像
 
 ```text
-小売販売データ
-  ↓ 01_data：前処理・日次集計・DB保存
-PostgreSQL
-  ↓ 02_model/training/training_data.py：学習・評価用CSV生成
-LightGBM
-  ↓ 02_model/training/weekly_operations.py：時系列検証・4週テスト・18週の運用再現
-MLflow：学習条件、週別MAE・WAPE、モデルv1/v2、再学習の判断を記録
+日次CSV → daily_batch.py → PostgreSQL（明細・日次販売・処理済み台帳）
+                                ↓
+weekly/replay.py ─→ 初期学習・4週検証・4週独立テスト・運用開始モデル
+                └→ 日次登録 → 月曜予測 → 翌月曜評価 → 2週連続悪化時だけ再学習
+                                ↓                 ↓
+                     PostgreSQLの予測・評価履歴    MLflowのモデル・監視履歴
+                                ↓
+                            Streamlit
 ```
 
-**別経路（画面表示用）：** `02_model/weekly/forecast.py`はMLflowの学習済みモデルを読み、予測をPostgreSQLに保存します。`03_app/app.py`はDBの保存済み予測と実績を読み取ります。**現状、上の週次運用シミュレーションの結果がStreamlitへ自動反映されるわけではありません。**
+日次と週次の制御は`02_model/weekly/replay.py`に集約しています。特徴量、学習、予測、評価は既存の関数を再利用します。モデル更新後は次の予測から新モデルを使います。旧CSVのみの18週・シャドー運用の実験履歴は保持し、その実行経路は現行処理へ置き換えています。
 
 ## 初期データ登録から運用開始モデルまで
 
@@ -38,27 +39,23 @@ MLflow：学習条件、週別MAE・WAPE、モデルv1/v2、再学習の判断�
 
 ## ローカルで動かす
 
-現在の検証用Dockerプロジェクト名は`demandpilot_reorganized`です。既存のv2と混同しないため、コマンドには同じ`-p`を指定します。
+検証環境は初期DBとMLflowのコピーから作成し、既存環境を保持します。現行の専用プロジェクトは`demandpilot_operations_20261024`です。
 
-```bash
-docker compose -p demandpilot_reorganized --profile tools build
-docker compose -p demandpilot_reorganized --profile tools up -d db mlflow dashboard
-docker compose -p demandpilot_reorganized --profile tools run --rm pipeline pytest -q 04_tests
-```
+- Streamlit：http://localhost:8504
+- MLflow：http://localhost:5003
+- 実行：`python -m weekly.replay --mode operations --initial-model-version 6`
 
-- Streamlit（現在のローカル設定）：http://localhost:8503
-- MLflow（現在のローカル設定）：http://localhost:5002
-
-データとモデルがない初回環境では、画面だけ起動しても予測結果は表示されません。具体的なデータ生成・MLflow記録手順は [05_docs/LOCAL_RUN.md](05_docs/LOCAL_RUN.md) を参照してください。
+環境変数・分離環境の準備・再実行方法は[ローカル実行手順](05_docs/LOCAL_RUN.md#7-8月9月の日次週次運用)を参照してください。
 
 ## 実装・確認できた範囲
 
-- PostgreSQLとDocker環境を起動し、**63件の自動テストが成功**（2026年10月23日、ユーザーのMacで確認）。Altairの非推奨API警告1件あり。
-- LightGBMの4週時系列検証・独立4週テスト・18週の運用再現を実行。MLflowに履歴と登録モデルを保存。
-- モデルのWAPEがベースラインより2週連続で悪化したため、2011年10月30日に1回再学習。
-- 旧方式の個別予測はDBへ保存でき、Streamlitの商品別画面に予測数量を表示できることを確認。
+- 2011年8月1日〜10月2日の63日を順番に処理。元Excelで0件と確認した10日も処理済みとして記録。
+- 8月1日〜9月26日の月曜予測9回、翌月曜の評価9回。最後は10月3日に評価し、次週予測は作成しない。
+- 9週ともLightGBMのWAPEがベースラインを下回り、実データでは再学習0回。再学習条件・即時モデル更新は合成データの結合テストで検証。
+- 再実行で予測・評価・MLflow Runが増えないこと、中断からの再開、未取込・未来データの拒否を検証。
+- 自動テスト77件成功。Streamlitの9週の指標と3画面をAppTestで確認し、ブラウザでも最終週の表示を確認。
 
-**未実施：** 自動スケジュール・クラウド本番運用・新しい運用シミュレーションからDB/Streamlitへの自動反映。実在庫の最適化でもありません。
+手動の過去データ運用再現です。自動スケジューラ、クラウド運用、実在庫最適化は対象外です。
 
 ## 公開に関する注意
 

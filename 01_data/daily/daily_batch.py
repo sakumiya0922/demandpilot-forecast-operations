@@ -43,7 +43,19 @@ def read_daily_csv(csv_path, batch_date):
         raise ValueError("CSVの列が不正です")
 
     if data.empty:
-        raise ValueError("CSVにデータがありません")
+        # 単に空のCSVを正常扱いしない。元Excelの0件確認記録とハッシュを照合する。
+        import hashlib
+        try:
+            evidence = json.loads((Path(csv_path).parent / "empty_days.json").read_text())
+            entry = evidence["days"][batch_date.isoformat()]
+            if (entry["rows"] != 0 or len(evidence["source_sha256"]) != 64
+                    or entry["csv_sha256"] != hashlib.sha256(Path(csv_path).read_bytes()).hexdigest()):
+                raise ValueError("空CSVの根拠が不正です")
+        except (OSError, KeyError, ValueError, TypeError) as error:
+            raise ValueError("CSVが空です。元Excelの取引0件確認がありません") from error
+        return data, {"date": batch_date.isoformat(), "input_rows": 0, "cancelled": 0,
+                      "nonpositive_quantity": 0, "negative_price": 0, "accepted_rows": 0,
+                      "verified_empty": True, "source_sha256": evidence["source_sha256"]}
 
     # 単価は後で正確な数値（Decimal）に変換するため、元の文字列を保存する
     original_prices = data["UnitPrice"].copy()

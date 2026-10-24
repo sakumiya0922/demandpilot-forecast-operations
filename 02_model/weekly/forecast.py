@@ -67,6 +67,16 @@ def verify_period(connection, start, end, source_dir):
         raise ValueError("履歴CSVとDBが不一致です。取込漏れ・集計・CSVの欠落を確認してください")
     return pd.DataFrame(rows, columns=['stock_code', 'sales_date', 'quantity'])
 
+def verify_processed_period(connection, start, end, source_dir):
+    """取引0件も含め全日がコミット済みか確認する。元CSVの消失・改変も拒否。"""
+    rows = dict(connection.execute("SELECT batch_date,source_sha256 FROM daily_batches WHERE batch_date BETWEEN %s AND %s",
+                                   (start, end)).fetchall())
+    for day in pd.date_range(start, end):
+        path = Path(source_dir) / f"{day:%Y-%m-%d}.csv"
+        if not path.is_file() or rows.get(day.date()) != hashlib.sha256(path.read_bytes()).hexdigest():
+            raise ValueError(f"日次処理が未完了、またはCSVが欠落・変更されています: {day.date()}")
+
+
 def verified_history(database_url, origin, source_dir, codes=None):
     origin = pd.Timestamp(origin).date()
     with psycopg.connect(database_url) as connection:
@@ -89,7 +99,7 @@ def verified_history(database_url, origin, source_dir, codes=None):
 
 
 
-def save_forecasts(database_url, features, predictions, origin, run_id, model_uri, prediction_id):
+def save_forecasts(database_url, features, predictions, origin, run_id, model_uri, prediction_id, metadata=None):
     origin = pd.Timestamp(origin).date()
     prediction_id = UUID(str(prediction_id))
     predictions = np.asarray(predictions, dtype=float)
@@ -104,6 +114,14 @@ def save_forecasts(database_url, features, predictions, origin, run_id, model_ur
         raise ValueError("特徴量の月が予測基準日と一致しません")
     # 1予測実行の全商品を一括確定する。失敗時はすべてロールバック。
     with psycopg.connect(database_url) as connection:
+        if metadata is not None:
+            from psycopg.types.json import Jsonb
+            connection.execute("""
+                INSERT INTO weekly_forecast_runs
+                (prediction_run_id,replay_id,week_start,simulated_at,mlflow_forecast_run_id,model_info)
+                VALUES (%s,%s,%s,%s,%s,%s)
+            """, (prediction_id, metadata["replay_id"], origin + timedelta(days=1),
+                  metadata["simulated_at"], metadata["forecast_run_id"], Jsonb(metadata["model_info"])))
         with connection.cursor() as cursor:
             cursor.executemany('''
                 INSERT INTO weekly_forecasts (
@@ -116,6 +134,25 @@ def save_forecasts(database_url, features, predictions, origin, run_id, model_ur
                    float(row.sales_sum_7), float(row.sales_sum_28), float(row.sales_std_28), int(row.month))
                   for i, row in enumerate(features.itertuples(index=False))])
     return str(prediction_id)
+
+
+def forecast_model(database_url, origin, info, source_dir, prediction_id, metadata=None):
+    """handoffのモデルを使う共通の推論経路。学習はしない。"""
+    origin = pd.Timestamp(origin)
+    if (info["features"] != FEATURE_COLUMNS
+            or pd.Timestamp(info["final_training"]["last_label_date"]) > origin):
+        raise ValueError("未来の実績で学習したモデル、または特徴量定義が不正です")
+    codes = info["product_codes"]
+    daily = verified_history(database_url, origin, source_dir, codes)
+    features = prediction_features(daily, codes, origin)
+    model = mlflow.lightgbm.load_model(info["model_uri"])
+    predictions = np.maximum(0, model.predict(matrix(features, codes)))
+    identifier = save_forecasts(database_url, features, predictions, origin,
+                                info.get("model_run_id", info.get("run_id")), info["model_uri"],
+                                prediction_id, metadata)
+    return {"prediction_run_id": identifier, "model_uri": info["model_uri"],
+            "forecast_origin": str(origin.date()), "products": len(features),
+            "predicted_quantity_total": float(predictions.sum())}
 
 
 def forecast(database_url, origin, run_id, products_path, source_dir, tracking_dir, prediction_id=None):
@@ -142,17 +179,9 @@ def forecast(database_url, origin, run_id, products_path, source_dir, tracking_d
     codes = pd.read_csv(products_path, dtype={'stock_code':str}).stock_code.tolist()
     if len(codes) != 100 or codes != conditions['product_codes']:
         raise ValueError('学習時の固定100品番が必要です')
-    daily = verified_history(database_url, origin, source_dir, codes)
-    features = prediction_features(daily, codes, origin)
-    model_uri = conditions['model_uri']
-    model = mlflow.lightgbm.load_model(model_uri)
-    predictions = np.maximum(0, model.predict(matrix(features, codes)))
-    identifier = save_forecasts(database_url, features, predictions, origin, run_id, model_uri,
-                                prediction_id or uuid4())
-    report = {'prediction_run_id':identifier, 'mlflow_run_id':run_id, 'model_uri':model_uri,
-              'forecast_origin':str(origin.date()), 'week_start':str((origin+pd.Timedelta(days=1)).date()),
-              'week_end':str((origin+pd.Timedelta(days=7)).date()), 'products':len(features),
-              'predicted_quantity_total':float(predictions.sum())}
+    report = forecast_model(database_url, origin, conditions, source_dir, prediction_id or uuid4())
+    report.update({'mlflow_run_id': run_id, 'week_start': str((origin+pd.Timedelta(days=1)).date()),
+                   'week_end': str((origin+pd.Timedelta(days=7)).date())})
     print(json.dumps(report, ensure_ascii=False, indent=2))
     return report
 

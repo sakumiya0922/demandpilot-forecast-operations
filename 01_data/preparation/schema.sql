@@ -39,3 +39,58 @@ CREATE TABLE IF NOT EXISTS weekly_forecasts (
     CHECK (forecast_origin = week_start - 1)
 );
 CREATE INDEX IF NOT EXISTS weekly_forecasts_week_idx ON weekly_forecasts(week_start, created_at);
+
+
+-- 時系列運用の処理済み記録。0件の日も未取り込みと区別する。
+CREATE TABLE IF NOT EXISTS daily_batches (
+    batch_date DATE PRIMARY KEY,
+    source_sha256 TEXT NOT NULL,
+    input_rows BIGINT NOT NULL CHECK (input_rows >= 0),
+    accepted_rows BIGINT NOT NULL CHECK (accepted_rows >= 0),
+    verified_empty BOOLEAN NOT NULL,
+    simulated_at TIMESTAMPTZ NOT NULL,
+    report JSONB NOT NULL,
+    completed_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS operation_replays (
+    replay_id UUID PRIMARY KEY,
+    replay_key TEXT UNIQUE NOT NULL,
+    initial_model JSONB NOT NULL,
+    mlflow_run_id TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('running', 'completed')),
+    result JSONB
+);
+CREATE TABLE IF NOT EXISTS weekly_forecast_runs (
+    prediction_run_id UUID PRIMARY KEY,
+    replay_id UUID NOT NULL REFERENCES operation_replays,
+    week_start DATE NOT NULL,
+    simulated_at TIMESTAMPTZ NOT NULL,
+    mlflow_forecast_run_id TEXT NOT NULL,
+    model_info JSONB NOT NULL,
+    UNIQUE (replay_id, week_start)
+);
+CREATE TABLE IF NOT EXISTS weekly_evaluations (
+    prediction_run_id UUID PRIMARY KEY REFERENCES weekly_forecast_runs,
+    evaluated_at TIMESTAMPTZ NOT NULL,
+    scores JSONB NOT NULL,
+    consecutive_bad_weeks INTEGER NOT NULL CHECK (consecutive_bad_weeks >= 0),
+    mlflow_run_id TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS weekly_evaluation_items (
+    prediction_run_id UUID NOT NULL,
+    stock_code TEXT NOT NULL,
+    actual BIGINT NOT NULL CHECK (actual >= 0),
+    comparison JSONB NOT NULL,
+    PRIMARY KEY (prediction_run_id, stock_code),
+    FOREIGN KEY (prediction_run_id, stock_code)
+        REFERENCES weekly_forecasts (prediction_run_id, stock_code),
+    FOREIGN KEY (prediction_run_id) REFERENCES weekly_evaluations
+);
+CREATE TABLE IF NOT EXISTS model_updates (
+    replay_id UUID NOT NULL REFERENCES operation_replays,
+    triggered_on DATE NOT NULL,
+    reason TEXT NOT NULL,
+    old_model JSONB NOT NULL,
+    new_model JSONB NOT NULL,
+    PRIMARY KEY (replay_id, triggered_on)
+);

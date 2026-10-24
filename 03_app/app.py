@@ -15,7 +15,7 @@ import pandas as pd
 import psycopg
 import streamlit as st
 
-from evaluation.evaluate import compare_actuals
+from evaluation.evaluate import compare_actuals, load_database_evaluation
 
 COLORS = alt.Scale(domain=['LightGBM', 'ベースライン', '実績'],
                    range=['#25496e', '#94a3b8', '#268b80'])
@@ -28,8 +28,9 @@ def load_runs(database_url):
         connection.execute('SET TRANSACTION READ ONLY')
         rows=connection.execute('''
             SELECT prediction_run_id::text,week_start,forecast_origin,
-                   MIN(created_at) AS created_at,COUNT(*) AS products
-            FROM weekly_forecasts GROUP BY prediction_run_id,week_start,forecast_origin
+                   COALESCE(MIN(r.simulated_at),MIN(f.created_at)) AS created_at,COUNT(*) AS products
+            FROM weekly_forecasts f LEFT JOIN weekly_forecast_runs r USING(prediction_run_id,week_start)
+            GROUP BY prediction_run_id,week_start,forecast_origin
             ORDER BY created_at DESC,prediction_run_id
         ''').fetchall()
         latest=connection.execute('SELECT MAX(sales_date) FROM daily_sales').fetchone()[0]
@@ -82,7 +83,14 @@ def load_model_info(run_id, model_uri):
             artifact = root / artifact.relative_to(docker_root)
         if not artifact.resolve().is_relative_to(root):
             raise ValueError('学習成果物の保存先が参照範囲外です。')
-        conditions = json.loads((artifact / 'conditions.json').read_text())
+        path = artifact / 'conditions.json'
+        if not path.exists():
+            conditions = json.loads((artifact / 'handoff.json').read_text())
+            if conditions.get('model_run_id') != run_id or conditions.get('model_uri') != model_uri:
+                raise ValueError('モデルIDと学習記録が一致しません。')
+            result['conditions'] = conditions
+            return result
+        conditions = json.loads(path.read_text())
         if conditions.get('run_id') != run_id or conditions.get('model_uri') != model_uri:
             raise ValueError('モデルIDと学習記録が一致しません。')
         result['conditions'] = conditions
@@ -106,6 +114,8 @@ def period_text(info):
     if training is not None:
         return f'{training.forecast_origin.min():%Y-%m-%d} ～ {training.forecast_origin.max():%Y-%m-%d}'
     final = info['conditions'].get('final_training', {})
+    if final.get('first_origin') and final.get('last_origin'):
+        return f'{final["first_origin"]} ～ {final["last_origin"]}'
     if final.get('origin_start') and final.get('origin_end'):
         return f'{final["origin_start"]} ～ {final["origin_end"]}'
     return '未記録'
@@ -113,6 +123,9 @@ def period_text(info):
 
 def evaluated(database_url, identifier, start, latest):
     """既存の照合・評価関数を再利用し、未取り込みをゼロ実績にしない。"""
+    stored, scores = load_database_evaluation(database_url, identifier)
+    if scores is not None:
+        return stored, scores, ''
     if latest is None or latest < start + timedelta(days=6):
         return None, None, '対象週の実績がまだそろっていません。'
     try:
@@ -393,7 +406,7 @@ def show_metadata(info, saved, run, latest, scores, reason):
         '学習データの対象期間（学習サンプルの基準日）': period_text(info),
         '学習に使った履歴・正解の範囲': '未記録' if training is None else f'{training.history_start.min():%Y-%m-%d} ～ {training.target_end.max():%Y-%m-%d}',
         '予測実行ID': run.prediction_run_id,
-        '予測保存日時': pd.Timestamp(run.created_at).tz_convert('Asia/Tokyo').strftime('%Y-%m-%d %H:%M:%S JST'),
+        '予測実行日時（運用再現／旧記録は保存日時）': pd.Timestamp(run.created_at).tz_convert('Asia/Tokyo').strftime('%Y-%m-%d %H:%M:%S JST'),
         '予測基準日': str(run.forecast_origin),
         '予測対象期間': f'{run.week_start} ～ {run.week_start + timedelta(days=6)}',
         '販売実績の最終記録日': str(latest) if latest else 'データなし',

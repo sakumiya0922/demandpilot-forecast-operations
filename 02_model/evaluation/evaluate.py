@@ -13,7 +13,7 @@ import psycopg
 
 from evaluation.metrics import metrics
 from training.training_data import UNKNOWN_PERIODS
-from weekly.forecast import verify_period
+from weekly.forecast import verify_period, verify_processed_period
 
 
 # 実績は日次集計からSQLで合計し、商品・予測実行IDで対応させる。
@@ -56,6 +56,8 @@ def compare_actuals(database_url, prediction_id, as_of, source_dir):
                 raise ValueError('実績の対象週が共通の空白期間を含んでいます')
         # 7日間の正本CSVに対し、明細・日次集計を全件照合。未取込なら評価しない。
         # 正本CSV群の完全性が前提。商品別に販売なしならSQLのLEFT JOINで0になる。
+        if connection.execute("SELECT 1 FROM weekly_forecast_runs WHERE prediction_run_id=%s", (prediction_id,)).fetchone():
+            verify_processed_period(connection, start, end, source_dir)
         verify_period(connection, start, end, source_dir)
     for model in ['baseline','lightgbm']:
         frame[model+'_signed_error'] = frame[model] - frame.actual
@@ -63,6 +65,32 @@ def compare_actuals(database_url, prediction_id, as_of, source_dir):
         frame[model+'_wape'] = frame[model+'_abs_error'] / frame.actual.replace(0,np.nan)
     scores = {model:metrics(frame.actual,frame[model]) for model in ['baseline','lightgbm']}
     return frame, scores
+
+
+def save_database_evaluation(database_url, prediction_id, frame, scores, evaluated_at, streak, run_id):
+    from psycopg.types.json import Jsonb
+    records = json.loads(frame.to_json(orient="records", date_format="iso"))
+    with psycopg.connect(database_url) as connection:
+        connection.execute("""
+            INSERT INTO weekly_evaluations VALUES (%s,%s,%s,%s,%s)
+        """, (prediction_id, evaluated_at, Jsonb(scores), streak, run_id))
+        with connection.cursor() as cursor:
+            cursor.executemany("""
+                INSERT INTO weekly_evaluation_items VALUES (%s,%s,%s,%s)
+            """, [(prediction_id, row["stock_code"], int(row["actual"]), Jsonb(row)) for row in records])
+
+
+def load_database_evaluation(database_url, prediction_id):
+    with psycopg.connect(database_url) as connection:
+        connection.execute("SET TRANSACTION READ ONLY")
+        row = connection.execute("SELECT scores FROM weekly_evaluations WHERE prediction_run_id=%s",
+                                 (prediction_id,)).fetchone()
+        if row is None:
+            return None, None
+        records = connection.execute("""
+            SELECT comparison FROM weekly_evaluation_items WHERE prediction_run_id=%s ORDER BY stock_code
+        """, (prediction_id,)).fetchall()
+    return pd.DataFrame([r[0] for r in records]), row[0]
 
 
 def save_evaluation(frame, scores, as_of, source_dir, output_root):

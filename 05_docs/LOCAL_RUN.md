@@ -27,17 +27,9 @@ docker compose -p demandpilot_reorganized --profile tools run --rm pipeline \
 
 既存のCSVは上書きしない実装なので、再生成する際は出力名を変える。日次CSVの取り込み方法は`01_data/daily/daily_batch.py`を参照。
 
-## 3. 新しい方式：4週検証→4週テスト→週次運用の再現
+## 3. 旧CSV方式の実験履歴
 
-```bash
-docker compose -p demandpilot_reorganized --profile tools run --rm pipeline \
-  python -m training.weekly_operations
-```
-
-- 実験：`demandpilot-weekly-operations`
-- 記録：候補別TimeSeriesSplit、テスト、週別のMAE・WAPE、再学習モデルv1/v2
-- `02_model/mlflow/`にMLflowのSQLiteと成果物を記録する。元v2のMLflow DBは移さず残す。
-- レポートは`python -m training.overview_report`で生成する（必要な学習履歴が存在する場合）。
+`demandpilot-weekly-operations`には、旧18週シミュレーションの履歴を保持する。旧シャドー運用の実行経路は現行の`weekly.replay --mode operations`に置き換えた。新しい実行は後述の7節を使う。初期学習の共通関数は`training.weekly_operations`に残す。
 
 ## 4. 別経路：DBへの個別予測と画面表示
 
@@ -48,7 +40,7 @@ docker compose -p demandpilot_reorganized --profile tools run --rm pipeline \
   python -m weekly.forecast --help
 ```
 
-**重要：** 新方式の運用シミュレーション結果は現状DB/Streamlitへ自動反映されない。実際の画面確認には、DBに保存済みの予測データが必要。
+**旧方式についての制約：** この個別コマンドは旧`conditions.json`を前提とする。現行の日次・週次運用は7節の統合経路を使い、DB/Streamlitへ反映する。
 
 ## 5. 注意
 
@@ -143,3 +135,104 @@ MAEは1品番の翌7日合計数量に対する平均絶対誤差。WAPEは100�
 最終確認のMLflowは`02_model/results/initial-validation-20261024/mlflow/`、実行結果は同ディレクトリの`runs/`に保存する。コンテナにはそれぞれ`/app/02_model/mlflow/`と`/app/02_model/results/`としてマウントする。MLflowのartifact URIはこのコンテナ内パスを基準にする。Docker内にGitコマンドがないため自動Git SHA記録は警告となるが、コードのスナップショットと入力SHA-256は保存される。
 
 8月以降の日次取り込み、日曜確定後の予測、翌週評価、2週連続悪化時の再学習、予測・評価履歴のDB保存はこの経路では未実装。
+
+
+## 7. 8月〜9月の日次・週次運用
+
+### 分離環境の準備
+
+この工程は、初期DBのコピーとMLflowのコピーを使用する。新規のComposeプロジェクト・ボリューム・ホスト保存先を用意し、元のDBや実験領域へは接続しない。初回の検証では以下を使用した。
+
+```bash
+export COMPOSE_PROJECT_NAME=demandpilot_operations_20261024
+export STORAGE_DIR=./02_model/results/operations-validation-20261024/storage
+export STORAGE_MODE=ro
+export MLFLOW_DIR=./02_model/results/operations-validation-20261024/mlflow
+export RESULTS_DIR=./02_model/results/operations-validation-20261024/runs
+export DASHBOARD_PORT=8504
+export MLFLOW_PORT=5003
+```
+
+既にこの環境が存在する場合は復元や初期化を繰り返さず、後述の運用コマンドを再実行する。別の新規検証にはプロジェクト名と保存先を変更する。
+
+新規環境の手順：
+
+1. 元の初期DBを`pg_dump --data-only --no-owner --no-privileges`で読み出す。
+2. 元のMLflowフォルダ一式を、まだ存在しない検証用`MLFLOW_DIR`へコピーする。SQLiteだけでなくArtifactsも必要。
+3. `docker compose --profile tools build pipeline`、`docker compose --profile tools up -d db`で新規DBを作り、その新規DBにだけダンプを復元する。新設テーブルは`schema.sql`の初回起動処理で作成される。
+4. 元CSVを保持したまま、検証用`STORAGE_DIR/daily/`を次のコマンドで準備する。入力ExcelとCSVのマウントは読み取り専用。出力先が既に存在する場合は拒否する。
+
+```bash
+docker compose --profile tools run --rm \
+  -v "$PWD/01_data/storage/daily:/original:ro" \
+  -v "$PWD/$STORAGE_DIR:/validation" \
+  -v "/absolute/path/Online Retail.xlsx:/tmp/source.xlsx:ro" \
+  pipeline python -m preparation.prepare_csv /tmp/source.xlsx \
+  --existing-dir /original --calendar-start 2011-08-01 --calendar-end 2011-10-02 \
+  --output-dir /validation/daily
+```
+
+Excelのパスは手元の実ファイルを指定する。CSVがない日の件数を元Excelで日付ごとに確認し、0件の場合だけヘッダーのみCSVを作る。元Excelで対象期間が確認できない場合や、その日に取引がある場合は停止する。`empty_days.json`にExcelのSHA-256・日付・0件・CSVのSHA-256を保存する。取引明細は追加しない。
+
+### 一括実行・再実行
+
+```bash
+docker compose --profile tools run --rm -e DEMANDPILOT_OPERATIONS_DB=1 \
+  pipeline python -m weekly.replay --mode operations --initial-model-version 6
+
+docker compose --profile tools run --rm pipeline pytest -q -p no:cacheprovider 04_tests
+docker compose --profile tools build dashboard mlflow
+docker compose --profile tools up -d dashboard mlflow
+```
+
+- 運用開始モデルのモデルID・Run ID・100品番・学習終了日は、登録バージョンの実際の`handoff.json`から取得する。
+- 月曜04:00 JSTに前週を評価し、必要なら更新して、05:00 JSTに翌7日を予測する。その後で当日の日次CSVを登録する。取引が0件の日も正常処理を台帳に記録する。
+- 事前確認では対象63ファイルの存在だけを調べ、当日の販売数量は当日ファイルから読む。予測は前日まで、学習は正解の終了日がその時点までの行だけを使う。DBに未来日付があれば停止する。
+- 各評価では7日分の処理済み台帳、CSVハッシュ、DB明細・集計の一致を確認する。0件と未取込を区別する。
+- WAPEがベースラインを厳密に上回る週が2回続いたときだけ再学習し、悪化カウントをリセットする。同値・WAPE未定義なら連続悪化をリセットする。更新モデルはその日の予測から使用する。シャドー採用ルールは使わない。
+- 最後は9月26日〜10月2日を10月3日に評価する。10月3日のCSVを取り込まず、次週の予測も作らない。
+- 同一運用は同じUUID、各予測は運用UUIDと対象週から生成する同じUUIDを使用する。DBの一意制約・日次台帳・MLflowのイベントキーで中断から再開し、完了後の再実行は同じ結果を返す。処理済みCSVが変わった場合は停止する。
+- セッションロックで同時実行を拒否する。1DBに異なる運用キーを混在させない。過去実績の訂正を上書きして再評価する運用は対象外。
+
+### 保存テーブルと確認結果
+
+| テーブル | 件数 | 内容 |
+|---|---:|---|
+| transactions | 364,680 | 初期279,367件＋運用85,313件 |
+| daily_sales | 203,304 | 初期156,862件＋運用46,442件 |
+| daily_batches | 63 | 8/1〜10/2の全日。0件日10日も記録 |
+| weekly_forecast_runs | 9 | 再現日時・使用モデル・MLflow予測Run |
+| weekly_forecasts | 900 | 9週×100品番。ベースラインは保存済みsales_sum_7 |
+| weekly_evaluations | 9 | 対応する予測ID、評価日時、MAE/WAPE、悪化カウント |
+| weekly_evaluation_items | 900 | 予測ID・品番・確定実績・予測・誤差のスナップショット |
+| model_updates | 0 | 発生時に理由・旧/新モデル・データ期間を保存 |
+| operation_replays | 1 | 再開用の親Run・開始モデル・完了結果 |
+
+日次入力は86,939件、前処理後85,313件。予測9回、評価9回、再学習0回。全週でLightGBMのWAPEがベースラインより小さかった。初期学習後の探索や特徴量追加はしていない。
+
+| 予測対象週（2011年） | LightGBM MAE | WAPE | ベースライン MAE | WAPE |
+|---|---:|---:|---:|---:|
+| 08-01〜08-07 | 168.35 | 55.33% | 270.51 | 88.90% |
+| 08-08〜08-14 | 163.68 | 58.89% | 199.65 | 71.83% |
+| 08-15〜08-21 | 140.54 | 55.05% | 184.02 | 72.08% |
+| 08-22〜08-28 | 120.48 | 47.07% | 157.21 | 61.42% |
+| 08-29〜09-04 | 139.41 | 62.07% | 185.62 | 82.65% |
+| 09-05〜09-11 | 132.49 | 50.30% | 206.60 | 78.43% |
+| 09-12〜09-18 | 143.89 | 52.42% | 158.24 | 57.65% |
+| 09-19〜09-25 | 163.16 | 50.49% | 189.02 | 58.49% |
+| 09-26〜10-02 | 123.91 | 51.32% | 168.52 | 69.79% |
+
+MLflow実験は`demandpilot-chronological-operations`。親1・予測9・評価9の計19Run、親Runの週次指標は各9ステップ。再実行でRun・指標・DB履歴が増えないことを確認した。再学習が発生した場合は同じ実験内に再学習Runと登録モデルRunを追加し、理由・旧/新モデル・使用データ・選定済み条件を保存する。
+
+- 親Run：`b4d56a4c0b5447759a9153089224d428`
+- 運用ID：`12cbe3c0-07a6-59fe-b7a3-73b908d066c8`
+- 使用モデル：`DemandPilotWeeklyLightGBM` version 6
+- モデルID：`models:/m-9fd6da1b4fbe4723a190be70e2222b90`
+- モデルRun：`8430f244809b40eba1724229d5acb86f`
+- 保存先：`02_model/results/operations-validation-20261024/`内の`storage/`・`mlflow/`・`runs/<運用ID>/`
+
+元Excelで0件と確認した日：8/6・13・20・27・29、9/3・10・17・24、10/1。確認元ExcelのSHA-256は`43465a06f2ccf7c8b5bd2892bc7defb52f97487934fe93b16ae4c3936424676d`。
+
+自動テストは77件成功。実データでは別プロセスからモデルを再読込し、保存予測と一致することを確認した。StreamlitはAppTestで9週の指標と全体評価・商品別分析・実行情報を確認し、例外0件。ブラウザでも最終週の51.32%／69.79%と9週の推移を表示できた。元Excel・既存CSV・元MLflow履歴558ファイルのハッシュと、初期DBの全データダンプが実行前後で一致した。
+
+今回の実データでは再学習条件に達しなかったため、新モデルの運用実績はない。再学習・即時更新・悪化カウントのリセットは、意図的に外れる初期モデルを使った結合テストで確認した。自動スケジュール・クラウド運用・任意期間への拡張は対象外。

@@ -1,9 +1,6 @@
-"""需要予測モデルの週次運用を、過去の販売データで再現する。
+"""初期学習・時系列検証・独立テストと共通の学習・MLflow記録関数。
 
-処理順: ①入力 → ②時系列検証・モデル選定 → ③独立テスト
-      → ④週次予測・前週の評価・必要時再学習 → ⑤MLflowに記録
-
-学習・運用の処理を理解するため、処理の流れはこのファイルに集約する。
+日次と週次の時系列制御はweekly.replayへ集約する。
 """
 import argparse
 import hashlib
@@ -147,12 +144,18 @@ def put_scores(scores, prefix):
                 mlflow.log_metric(f"{prefix}_{name}_{key}", values[key])
 
 
-def log_weekly_history(client, parent_run_id, stage, index, scores):
+def log_weekly_history(client, parent_run_id, stage, index, scores, idempotent=False):
     """親Runに時系列の指標を保存。stepは週番号（0起点）。"""
     for model_name in ("lightgbm", "baseline"):
         for metric_name in ("mae", "wape"):
             value = scores[model_name][metric_name]
             if value is not None:
+                if idempotent:
+                    old = [m for m in client.get_metric_history(parent_run_id, f"{stage}_{model_name}_{metric_name}") if m.step == index]
+                    if old:
+                        if any(m.value != float(value) for m in old):
+                            raise ValueError("保存済みの週次指標と値が一致しません")
+                        continue
                 client.log_metric(parent_run_id, f"{stage}_{model_name}_{metric_name}",
                                   float(value), step=index)
 
@@ -186,7 +189,9 @@ def put_csv(df, output, artifact_path):
 
 # ━━ 5. 全体の実行順序 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def run(csv_path, products_path, tracking_dir, *, experiment_name=DEFAULT_EXPERIMENT, bad_weeks=2, initial_only=False):
-    """検証・テスト・週次運用をこの順に実行し、1つのMLflow実験に残す。"""
+    """初期学習・検証・独立テスト・運用開始モデルを1つの実験に残す。"""
+    if not initial_only:
+        raise ValueError("週次運用はweekly.replay --mode operationsで実行してください")
     if bad_weeks < 1:
         raise ValueError("再学習までの悪化週数は1以上")
     # ① 入力データ確認。1週100品番、正解の終了日などを検査する。
@@ -197,9 +202,6 @@ def run(csv_path, products_path, tracking_dir, *, experiment_name=DEFAULT_EXPERI
     test = [(week, frame.loc[frame.forecast_origin.eq(week)].copy()) for week in TEST_ORIGINS]
     if any(rows.empty for _, rows in test):
         raise ValueError("7月のテスト4週がそろっていません")
-    operations = [(pd.Timestamp(week), subset.copy()) for week, subset in frame.groupby("forecast_origin", sort=True) if week >= OPERATIONS_START]
-    if not operations and not initial_only:
-        raise ValueError("週次運用期間のデータがありません")
     # MLflowの保存先はDockerの永続マウント（02_model/mlflow）。
     tracking_dir = Path(tracking_dir).resolve()
     tracking_dir.mkdir(parents=True, exist_ok=True)
@@ -334,98 +336,6 @@ def run(csv_path, products_path, tracking_dir, *, experiment_name=DEFAULT_EXPERI
                 mlflow.log_dict(summary, "summary.json")
                 print(json.dumps(summary, ensure_ascii=False, indent=2), flush=True)
                 return summary
-            # テストがベースラインより悪い場合は、運用で既存モデルを採用しない。
-            # ただし運用リプレイでは両方のスコアを保存し、どちらを採用したか明示する。
-            adopted = (is_worse(test_score) is False)
-            mlflow.set_tag("adoption_decision", "lightgbm" if adopted else "baseline")
-            model = frozen
-            model_version = 1
-            model_cutoff = cutoff
-            streak = 0
-            recovery_streak = 0
-            pending = None
-            predictions, monitoring, retrain_events = [], [], []
-            week_calendar = []
-            # ④ 週次運用: 前週の実績を評価→必要なら更新→今週の予測を保存。
-            for week_index, (week, subset) in enumerate(operations):
-                # 週初めに、前週の確定実績を確認。未来の実績を先読みしない。
-                if pending is not None:
-                    previous_week, previous_rows, previous_run = pending
-                    if previous_rows.target_end.max() <= week:
-                        weekly_score = score(previous_rows)
-                        streak, worse = update_bad_streak(streak, weekly_score)
-                        recovery_streak = recovery_streak + 1 if worse is False else 0
-                        # テストで不採用だったモデルもシャドー予測で2週連続改善すれば適用する。
-                        if not adopted and recovery_streak >= 2:
-                            adopted = True
-                        monitoring.append({"origin": str(previous_week.date()), "evaluated_on": str(week.date()), "worse_than_baseline": worse, "consecutive_bad_weeks": streak, "scores": weekly_score, "model_version": model_version})
-                        log_weekly_history(client, parent_id, "operations_weekly", week_index - 1, weekly_score)
-                        with mlflow.start_run(run_name=f"monitor-{previous_week.date()}", nested=True):
-                            mlflow.set_tags({"stage": "monitor", "forecast_run_id": previous_run, "evaluated_on": str(week.date())})
-                            mlflow.log_params({"consecutive_bad_weeks": streak, "trigger_limit": bad_weeks})
-                            put_scores(weekly_score, "observed")
-                            mlflow.log_metric("worse_than_baseline", int(bool(worse)))
-                            if streak >= bad_weeks:
-                                eligible = train_before(frame, week)
-                                model = model_fit(eligible, codes, params)
-                                model_version += 1
-                                model_cutoff = week
-                                event = {"triggered_on": str(week.date()), "reason": f"{bad_weeks}_consecutive_weeks_WAPE_worse_than_baseline", "previous_run": previous_run, "new_model_version": model_version, "training_rows": len(eligible), "last_known_label": str(eligible.target_end.max().date())}
-                                retrain_events.append(event)
-                                mlflow.log_dict(event, "retraining/event.json")
-                                model.booster_.save_model(str(output / f"model_v{model_version}.txt"))
-                                mlflow.log_artifact(str(output / f"model_v{model_version}.txt"), "retraining")
-                                active_model = register_version(model, eligible, codes, model_version,
-                                                                week, event["reason"], parent_id)
-                                model_history.append(active_model)
-                                event.update({"model_run_id": active_model["model_run_id"],
-                                              "registered_model_version": active_model["registered_model_version"]})
-                                mlflow.log_dict(event, "retraining/model_registry_link.json")
-                                streak = 0
-                                recovery_streak = 0
-                                adopted = False  # 再学習モデルは次週以降の実績で採用を再判定する。
-                # 実績の確定前にその週を予測。スコアは次の週に初めて計算される。
-                with mlflow.start_run(run_name=f"forecast-{week.date()}", nested=True) as forecast_run:
-                    mlflow.set_tags({"stage": "weekly_forecast", "forecast_origin": str(week.date()), "selected_policy": "lightgbm" if adopted else "baseline",
-                                     "model_run_id": active_model["model_run_id"],
-                                     "registered_model_name": REGISTERED_MODEL,
-                                     "registered_model_version": active_model["registered_model_version"]})
-                    mlflow.log_params({"model_version": model_version, "model_train_cutoff": str(model_cutoff.date()), "hyperparameter_candidate": best["candidate"]})
-                    rows = record_predictions(subset, model.predict(matrix(subset, codes)), "operation", model_version)
-                    rows["adopted_prediction"] = rows.lightgbm if adopted else rows.baseline
-                    # 推論時に未確定の実績/正解を予測Runに保存しない。
-                    put_csv(rows.drop(columns=["target"]), output / "weekly_predictions.csv", "predictions")
-                    mlflow.log_metric("weekly_predicted_total", float(rows.adopted_prediction.sum()))
-                    predictions.append(rows)
-                    week_calendar.append({"step": week_index, "forecast_origin": str(week.date()),
-                                          "model_run_id": active_model["model_run_id"],
-                                          "logical_model_version": model_version,
-                                          "registry_version": active_model["registered_model_version"],
-                                          "selected_policy": "lightgbm" if adopted else "baseline"})
-                    pending = (week, rows, forecast_run.info.run_id)
-            # 最終週に7日後の実績がデータセット内でそろう場合だけ集計。実績未確定なら保留。
-            if pending is not None:
-                last_week, last_rows, last_run = pending
-                if last_rows.target_end.max() <= frame.target_end.max():
-                    last_score = score(last_rows)
-                    monitoring.append({"origin": str(last_week.date()), "evaluated_on": "offline_data_end", "worse_than_baseline": is_worse(last_score), "scores": last_score, "model_version": model_version})
-                    log_weekly_history(client, parent_id, "operations_weekly", len(operations) - 1, last_score)
-                    with mlflow.start_run(run_name=f"monitor-{last_week.date()}", nested=True):
-                        mlflow.set_tags({"stage": "monitor", "forecast_run_id": last_run, "evaluated_on": "offline_data_end"})
-                        put_scores(last_score, "observed")
-            # ⑤ 成果物: 全週の予測、モデルの履歴、週とモデルの対応を保存。
-            all_predictions = pd.concat(predictions, ignore_index=True)
-            put_csv(all_predictions, output / "operational_predictions.csv", "operations")
-            mlflow.log_dict({"monitoring": monitoring, "retrain_events": retrain_events}, "operations/monitoring.json")
-            mlflow.log_dict({"model_versions": model_history, "week_to_model": week_calendar},
-                            "models/version_history.json")
-            mlflow.log_dict({"test_origins": [str(w.date()) for w, _ in test],
-                             "operation_origins": [str(w.date()) for w, _ in operations],
-                             "step_is_zero_based": True}, "operations/metric_step_calendar.json")
-            summary = {"parent_run_id": parent_id, "selected_hyperparameters": params, "cv_overall": best['scores'], "test_overall": test_score, "adopted_policy": "lightgbm" if adopted else "baseline", "operational_weeks": len(operations), "retraining_events": retrain_events, "note": "historical replay; no live scheduling, no automatic database publish"}
-            mlflow.log_dict(summary, "summary.json")
-            print(json.dumps(summary, ensure_ascii=False, indent=2), flush=True)
-            return summary
 
 
 if __name__ == "__main__":
@@ -435,4 +345,4 @@ if __name__ == "__main__":
     parser.add_argument("--tracking-dir", type=Path, default=Path("02_model/mlflow"))
     parser.add_argument("--bad-weeks", type=int, default=2)
     options = parser.parse_args()
-    run(options.csv, options.products, options.tracking_dir, bad_weeks=options.bad_weeks)
+    run(options.csv, options.products, options.tracking_dir, bad_weeks=options.bad_weeks, initial_only=True)
