@@ -62,4 +62,3 @@ mlartifacts/
 .ruff_cache/
 .mypy_cache/
 .coverage.*
-05_docs/archive/
