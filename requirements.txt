@@ -9,3 +9,4 @@ mlflow==3.4.0
 SQLAlchemy==2.0.43
 streamlit==1.42.2
 altair==5.5.0
+matplotlib==3.11.2

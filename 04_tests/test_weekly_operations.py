@@ -292,14 +292,25 @@ def test_chronological_operations_resume_retrain_and_exactly_once(tmp_path, data
             raise RuntimeError("simulated interruption")
         return real_batch(path, day, url)
     monkeypatch.setattr(replay, "run_daily_batch", interrupted)
+    original_forecast = replay.forecast_model
+    model_checkpoint_failed = [False]
+    def forecast_interruption(url, origin, *args, **kwargs):
+        if str(origin) == "2011-08-14" and not model_checkpoint_failed[0]:
+            model_checkpoint_failed[0] = True
+            raise RuntimeError("model checkpoint interruption")
+        return original_forecast(url, origin, *args, **kwargs)
+    monkeypatch.setattr(replay, "forecast_model", forecast_interruption)
     try:
         with pytest.raises(RuntimeError, match="interruption"):
+            replay.operate(database, source, tmp_path / "output", tracking, initial_version=1)
+        with pytest.raises(RuntimeError, match="model checkpoint"):
             replay.operate(database, source, tmp_path / "output", tracking, initial_version=1)
         result = replay.operate(database, source, tmp_path / "output", tracking, initial_version=1)
         assert result["counts"]["daily_batches"] == 63
         assert result["counts"]["weekly_forecasts"] == 900
         assert result["counts"]["weekly_evaluations"] == 9
-        assert result["counts"]["weekly_evaluation_items"] == 900
+        assert result["evaluated_forecasts"] == 900
+        assert len(client.search_model_versions("name='DemandPilotWeeklyLightGBM'")) == 2
         assert len(result["updates"]) == 1
         assert result["updates"][0]["on"] == "2011-08-15"
         assert result["weekly"][2]["model"]["model_uri"] == result["updates"][0]["new"]["model_uri"]

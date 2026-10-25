@@ -34,6 +34,7 @@ CREATE TABLE IF NOT EXISTS weekly_forecasts (
     sales_sum_28 NUMERIC NOT NULL CHECK (sales_sum_28 >= 0 AND sales_sum_28 < 'Infinity'::numeric),
     sales_std_28 DOUBLE PRECISION NOT NULL CHECK (sales_std_28 >= 0 AND sales_std_28 < 'Infinity'::double precision),
     month INTEGER NOT NULL CHECK (month = EXTRACT(MONTH FROM forecast_origin)),
+    actual_quantity BIGINT CHECK (actual_quantity >= 0),
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (prediction_run_id, stock_code),
     CHECK (forecast_origin = week_start - 1)
@@ -76,21 +77,5 @@ CREATE TABLE IF NOT EXISTS weekly_evaluations (
     consecutive_bad_weeks INTEGER NOT NULL CHECK (consecutive_bad_weeks >= 0),
     mlflow_run_id TEXT NOT NULL
 );
-CREATE TABLE IF NOT EXISTS weekly_evaluation_items (
-    prediction_run_id UUID NOT NULL,
-    stock_code TEXT NOT NULL,
-    actual BIGINT NOT NULL CHECK (actual >= 0),
-    comparison JSONB NOT NULL,
-    PRIMARY KEY (prediction_run_id, stock_code),
-    FOREIGN KEY (prediction_run_id, stock_code)
-        REFERENCES weekly_forecasts (prediction_run_id, stock_code),
-    FOREIGN KEY (prediction_run_id) REFERENCES weekly_evaluations
-);
-CREATE TABLE IF NOT EXISTS model_updates (
-    replay_id UUID NOT NULL REFERENCES operation_replays,
-    triggered_on DATE NOT NULL,
-    reason TEXT NOT NULL,
-    old_model JSONB NOT NULL,
-    new_model JSONB NOT NULL,
-    PRIMARY KEY (replay_id, triggered_on)
-);
+
+-- 新規DB用。既存の9テーブルDBに破壊的な移行は行わない。

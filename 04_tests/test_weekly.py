@@ -89,8 +89,6 @@ OLD_TABLE='''CREATE TABLE weekly_forecasts (
 def test_empty_old_forecast_schema_migrates_and_reruns_safely(database):
     migration=(Path(__file__).parents[1]/'02_model/weekly/migrate_forecasts.sql').read_text()
     with psycopg.connect(database,autocommit=True) as connection:
-        # 旧形式の再現前に、新設した空の評価明細だけを隔離スキーマ内で外す。
-        connection.execute('DROP TABLE weekly_evaluation_items')
         connection.execute('DROP TABLE weekly_forecasts')
         connection.execute(OLD_TABLE)
         connection.execute(migration)
@@ -102,8 +100,6 @@ def test_empty_old_forecast_schema_migrates_and_reruns_safely(database):
 def test_migration_refuses_to_discard_old_predictions(database):
     migration=(Path(__file__).parents[1]/'02_model/weekly/migrate_forecasts.sql').read_text()
     with psycopg.connect(database,autocommit=True) as connection:
-        # 旧形式の再現前に、新設した空の評価明細だけを隔離スキーマ内で外す。
-        connection.execute('DROP TABLE weekly_evaluation_items')
         connection.execute('DROP TABLE weekly_forecasts')
         connection.execute(OLD_TABLE)
         connection.execute("INSERT INTO weekly_forecasts(week_start,stock_code,forecast_origin,predicted_quantity,model_name) VALUES ('2011-06-06','A','2011-06-05',10,'old')")

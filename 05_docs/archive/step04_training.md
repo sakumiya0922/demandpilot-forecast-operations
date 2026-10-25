@@ -1,8 +1,10 @@
+> 履歴資料です。旧方式・旧環境の記録を保存しています。現行手順は[LOCAL_RUN.md](../LOCAL_RUN.md)、現行設計は[ARCHITECTURE.md](../ARCHITECTURE.md)を参照してください。ここにある旧コマンド・旧件数は現行版の仕様ではありません。
+
 # 【旧方式の記録】04：学習データの作成・時系列検証・モデル保存
 
-> **履歴資料です。** 以下の`python -m training.train`は削除済みの旧コマンドです。現在の運用再現は[LOCAL_RUN.md](LOCAL_RUN.md)にある`python -m training.weekly_operations`を使用してください。旧評価値も現行方式の結果ではありません。
+> **履歴資料です。** 以下の`python -m training.train`は削除済みの旧コマンドです。現在の運用再現はLOCAL_RUN.md（当時の参照: `LOCAL_RUN.md`）にある`python -m training.weekly_operations`を使用してください。旧評価値も現行方式の結果ではありません。
 
-このフォルダは、初回の学習と、必要に応じた手動再学習で使う。毎週の予測は [step05](step05_weekly.md)、全体の準備手順は [トップREADME](../README.md) を参照する。
+このフォルダは、初回の学習と、必要に応じた手動再学習で使う。毎週の予測は step05（当時の参照: `step05_weekly.md`）、全体の準備手順は トップREADME（当時の参照: `../README.md`） を参照する。
 
 ## 学習データを作る
 
@@ -96,4 +98,4 @@ http://localhost:5001 で実験 `demandpilot-v2` を開く。
 Docker内では共通の絶対パス `/app/02_model/mlflow/` を使う。ホストPythonから直接参照する場合はパスの違いに注意する。
 
 再現にはコードだけでなく、学習CSV・商品一覧・学習条件・環境・保存モデルの対応が必要である。
-テストと現在の確認状況は [トップREADME](../README.md#テストと確認状況) を参照する。
+テストと現在の確認状況は トップREADME（当時の参照: `../README.md#テストと確認状況`） を参照する。

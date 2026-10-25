@@ -1,3 +1,5 @@
+> 履歴資料です。旧方式・旧環境の記録を保存しています。現行手順は[LOCAL_RUN.md](../LOCAL_RUN.md)、現行設計は[ARCHITECTURE.md](../ARCHITECTURE.md)を参照してください。ここにある旧コマンド・旧件数は現行版の仕様ではありません。
+
 # MLflowの読みやすい概要レポート
 
 既存の`weekly-model-lifecycle`親Runに保存済みの4種類のJSON成果物から、**目的別の4セクション**を含む日本語HTMLレポートを作成します。学習やテストは再実行しません。

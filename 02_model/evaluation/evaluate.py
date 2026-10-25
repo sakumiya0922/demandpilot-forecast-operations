@@ -59,6 +59,11 @@ def compare_actuals(database_url, prediction_id, as_of, source_dir):
         if connection.execute("SELECT 1 FROM weekly_forecast_runs WHERE prediction_run_id=%s", (prediction_id,)).fetchone():
             verify_processed_period(connection, start, end, source_dir)
         verify_period(connection, start, end, source_dir)
+    return comparison_result(frame)
+
+
+def comparison_result(frame):
+    """取込実績と保存済み実績に共通の誤差・指標計算。"""
     for model in ['baseline','lightgbm']:
         frame[model+'_signed_error'] = frame[model] - frame.actual
         frame[model+'_abs_error'] = frame[model+'_signed_error'].abs()
@@ -69,28 +74,42 @@ def compare_actuals(database_url, prediction_id, as_of, source_dir):
 
 def save_database_evaluation(database_url, prediction_id, frame, scores, evaluated_at, streak, run_id):
     from psycopg.types.json import Jsonb
-    records = json.loads(frame.to_json(orient="records", date_format="iso"))
+    if frame.empty or frame.stock_code.duplicated().any() or not frame.prediction_run_id.eq(str(prediction_id)).all():
+        raise ValueError("評価対象の予測ID・品番が不正です")
     with psycopg.connect(database_url) as connection:
         connection.execute("""
             INSERT INTO weekly_evaluations VALUES (%s,%s,%s,%s,%s)
         """, (prediction_id, evaluated_at, Jsonb(scores), streak, run_id))
-        with connection.cursor() as cursor:
-            cursor.executemany("""
-                INSERT INTO weekly_evaluation_items VALUES (%s,%s,%s,%s)
-            """, [(prediction_id, row["stock_code"], int(row["actual"]), Jsonb(row)) for row in records])
+        # 予測値はコピー・JSON化せず、同じ商品行に確定実績だけを一度保存する。
+        # 不整合があればヘッダーも含めてロールバックする。
+        for row in frame.itertuples(index=False):
+            cursor = connection.execute("""
+                UPDATE weekly_forecasts SET actual_quantity=%s
+                WHERE prediction_run_id=%s AND stock_code=%s AND actual_quantity IS NULL
+            """, (int(row.actual), prediction_id, row.stock_code))
+            if cursor.rowcount != 1:
+                raise ValueError("予測が存在しない、または確定実績が既に保存されています")
 
 
 def load_database_evaluation(database_url, prediction_id):
     with psycopg.connect(database_url) as connection:
-        connection.execute("SET TRANSACTION READ ONLY")
+        connection.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
         row = connection.execute("SELECT scores FROM weekly_evaluations WHERE prediction_run_id=%s",
                                  (prediction_id,)).fetchone()
         if row is None:
             return None, None
-        records = connection.execute("""
-            SELECT comparison FROM weekly_evaluation_items WHERE prediction_run_id=%s ORDER BY stock_code
-        """, (prediction_id,)).fetchall()
-    return pd.DataFrame([r[0] for r in records]), row[0]
+        cursor = connection.execute("""
+            SELECT prediction_run_id::text,stock_code,week_start,forecast_origin,
+                   predicted_quantity::double precision AS lightgbm,
+                   sales_sum_7::double precision AS baseline,sales_sum_28::double precision,
+                   sales_std_28,month,mlflow_run_id,model_uri,created_at,actual_quantity AS actual
+            FROM weekly_forecasts WHERE prediction_run_id=%s ORDER BY stock_code
+        """, (prediction_id,))
+        frame = pd.DataFrame(cursor.fetchall(), columns=[c.name for c in cursor.description])
+    if frame.empty or frame.actual.isna().any():
+        raise ValueError("評価ヘッダーに対応する確定実績が不足しています")
+    frame, _ = comparison_result(frame)
+    return frame, row[0]
 
 
 def save_evaluation(frame, scores, as_of, source_dir, output_root):

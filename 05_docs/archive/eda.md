@@ -1,3 +1,5 @@
+> 履歴資料です。旧方式・旧環境の記録を保存しています。現行手順は[LOCAL_RUN.md](../LOCAL_RUN.md)、現行設計は[ARCHITECTURE.md](../ARCHITECTURE.md)を参照してください。ここにある旧コマンド・旧件数は現行版の仕様ではありません。
+
 # DemandPilot v2：初期データの探索と予測対象の選定
 
 分析日：2026-10-17（日本時間）。DBは読み取りのみ。モデルの学習・予測は未実行。
@@ -29,7 +31,7 @@
 
 ## 全商品共通の空白週
 
-![全商品の週別数量・明細件数](analysis_results/weekly_overview.png)
+全商品の週別数量・明細件数（当時の参照: `analysis_results/weekly_overview.png`）
 
 **2010-12-27〜2011-01-02は、DBの登録明細も日別CSVの元明細も0件。**
 それ以外の24週には取引記録がある。日別CSVの件数を確認しているため、
@@ -73,7 +75,7 @@ DB取り込みでの除外だけによって空白週が発生したわけでは
 
 ## 数量1位23166を対象外とした理由
 
-![23166と選定上位商品の週別数量](analysis_results/product_weekly.png)
+23166と選定上位商品の週別数量（当時の参照: `analysis_results/product_weekly.png`）
 
 23166は合計75,015個だが、販売は4週のみ。
 最大の1週が74,215個（合計の98.93%）を占める。
@@ -92,17 +94,17 @@ DB取り込みでの除外だけによって空白週が発生したわけでは
 
 ## 予測対象100品番
 
-![販売頻度と選定上位20品番](analysis_results/selection.png)
+販売頻度と選定上位20品番（当時の参照: `analysis_results/selection.png`）
 
 1. 記録のある24週のうち20週以上で販売がある商品を候補とする。
 2. 分析期間の販売数量合計の降順で上位100品番を採用。同数は商品コード昇順。
-3. 100品番を[固定一覧](target_products.csv)に保存し、6月以降の結果で選び直さない。
+3. 100品番を固定一覧（当時の参照: `target_products.csv`）に保存し、6月以降の結果で選び直さない。
 
 候補は985品番。選定100品番の数量は週次分析期間全商品の30.84%を占める。
 20週という基準と100品番という数は、継続性と実装規模を考慮した今回の方針であり、
 統計的な最適値ではない。
 
-以下は上位20品番。全100件は[選定結果CSV](analysis_results/selected_top100.csv)、全商品は[ランキングCSV](analysis_results/product_ranking.csv)を参照。
+以下は上位20品番。全100件は選定結果CSV（当時の参照: `analysis_results/selected_top100.csv`）、全商品はランキングCSV（当時の参照: `analysis_results/product_ranking.csv`）を参照。
 
 | 順位 | 品番 | 商品名 | 合計数量 | 販売週数 |
 |---|---|---|---|---|
@@ -138,9 +140,9 @@ DB取り込みでの除外だけによって空白週が発生したわけでは
 
 ## 再現方法と成果物
 
-DB集計は[eda.sql](eda.sql)、選定条件は[select_products.sql](select_products.sql)。
-元CSVの品質ルールは[日次バッチ](../01_data/daily/daily_batch.py)と同じ優先順で再計数し、DB登録件数との一致を確認した。
-[再生成スクリプト](build_eda.py)は現在のDBとCSVからCSV・図・本文を作り直す。
+DB集計はeda.sql（当時の参照: `eda.sql`）、選定条件はselect_products.sql（当時の参照: `select_products.sql`）。
+元CSVの品質ルールは日次バッチ（当時の参照: `../01_data/daily/daily_batch.py`）と同じ優先順で再計数し、DB登録件数との一致を確認した。
+再生成スクリプト（当時の参照: `build_eda.py`）は現在のDBとCSVからCSV・図・本文を作り直す。
 同じ出力先のEDA成果物を上書きするため、記録を残したい場合は事前に退避する。
 固定した `target_products.csv` は上書きしない。DBやモデルも変更しない。
 
@@ -153,10 +155,10 @@ python3 -m venv /tmp/demandpilot-v2-eda-env
 
 Dockerが起動し、v2のDBが稼働していることが前提。DB内に6月以降が追加されても期間条件は固定。
 ただし過去の明細修正等があれば再集計結果は変わる。入力CSVのSHA-256、SQL・対象一覧のSHA-256、
-生成時刻・実行環境は[実行記録](analysis_results/run_record.json)に保存している。
+生成時刻・実行環境は実行記録（当時の参照: `analysis_results/run_record.json`）に保存している。
 
-- [週別全体集計](analysis_results/weekly_totals.csv)：25週の空白週を含む。
-- [商品別週次集計](analysis_results/weekly_products.csv)：販売のある商品×週のみ。行なしは欠落かゼロかをこのCSVだけで判別できない。
-- [23166の大口元明細](analysis_results/23166_large_raw_transactions.csv)：顧客IDは含めない。
+- 週別全体集計（当時の参照: `analysis_results/weekly_totals.csv`）：25週の空白週を含む。
+- 商品別週次集計（当時の参照: `analysis_results/weekly_products.csv`）：販売のある商品×週のみ。行なしは欠落かゼロかをこのCSVだけで判別できない。
+- 23166の大口元明細（当時の参照: `analysis_results/23166_large_raw_transactions.csv`）：顧客IDは含めない。
 
 集計CSV・図はEDAの記録であり、DBの新規テーブルや本番処理の入力ではない。

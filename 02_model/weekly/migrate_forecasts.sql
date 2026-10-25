@@ -26,5 +26,6 @@ BEGIN
     END IF;
 END;
 $migration$;
+ALTER TABLE weekly_forecasts ADD COLUMN IF NOT EXISTS actual_quantity BIGINT CHECK (actual_quantity >= 0);
 CREATE INDEX IF NOT EXISTS weekly_forecasts_week_idx ON weekly_forecasts(week_start, created_at);
 COMMIT;

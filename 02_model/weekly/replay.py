@@ -208,10 +208,12 @@ def _retrain(database_url, source_dir, output, active, day, client, event_id):
     return info
 
 
-def operate(database_url, source_dir, output_root, tracking_dir, *, initial_version=6,
+def operate(database_url, source_dir, output_root, tracking_dir, *, initial_version=None,
             replay_key="august-september-2011"):
     if os.environ.get("DEMANDPILOT_OPERATIONS_DB") != "1":
         raise ValueError("分離した検証DBでDEMANDPILOT_OPERATIONS_DB=1を指定してください")
+    if initial_version is None:
+        raise ValueError("運用開始モデルの登録バージョンを明示してください")
     check_calendar(source_dir)  # ファイルの存在だけを確認。未来の販売数量は読まない。
     tracking_dir = Path(tracking_dir).resolve()
     mlflow.set_tracking_uri("sqlite:///" + str(tracking_dir / "mlflow.db"))
@@ -248,7 +250,7 @@ def operate(database_url, source_dir, output_root, tracking_dir, *, initial_vers
                 c.execute("""INSERT INTO operation_replays VALUES (%s,%s,%s,%s,'running',NULL)
                              ON CONFLICT (replay_id) DO NOTHING""",
                           (replay_id, replay_key, Jsonb(initial), parent.info.run_id))
-            active, streak, trace = initial, 0, []
+            active, streak, trace, updates = initial, 0, [], []
             for stamp in pd.date_range(OPS_START, FINAL_EVALUATION):
                 day = stamp.date()
                 if day.weekday() == 0:
@@ -284,21 +286,17 @@ def operate(database_url, source_dir, output_root, tracking_dir, *, initial_vers
                                                          _clock(day, 4), streak, event.info.run_id)
                         trace.append({"event": "evaluate", "day": str(day), "prediction_id": str(previous_id)})
                         if streak >= 2:
-                            updates = _read(database_url, "SELECT new_model FROM model_updates WHERE replay_id=%s AND triggered_on=%s", (replay_id, day))
-                            if updates:
-                                active = updates[0][0]
-                            else:
-                                with _event(client, experiment_id, f"{replay_id}:retrain:{day}", f"retrain-{day}") as (event, finished):
-                                    if finished:
-                                        new = json.loads(Path(client.download_artifacts(event.info.run_id, "new_model.json")).read_text())
-                                    else:
-                                        new = _retrain(database_url, source_dir, output, active, day, client, event.info.run_id)
-                                        mlflow.set_tags({"stage": "retraining", "triggered_on": _clock(day, 4),
-                                                         "old_model_uri": active["model_uri"], "new_model_uri": new["model_uri"]})
-                                    with psycopg.connect(database_url) as c:
-                                        c.execute("INSERT INTO model_updates VALUES (%s,%s,%s,%s,%s)",
-                                                  (replay_id, day, "2_consecutive_weeks_WAPE_worse_than_baseline", Jsonb(active), Jsonb(new)))
-                                    active = new
+                            previous_model = active
+                            # モデル更新はMLflowの一意なイベントと成果物を正本にする。
+                            # 再開時も完了済みモデルを読み、重複登録しない。
+                            with _event(client, experiment_id, f"{replay_id}:retrain:{day}", f"retrain-{day}") as (event, finished):
+                                if finished:
+                                    active = json.loads(Path(client.download_artifacts(event.info.run_id, "new_model.json")).read_text())
+                                else:
+                                    active = _retrain(database_url, source_dir, output, previous_model, day, client, event.info.run_id)
+                                    mlflow.set_tags({"stage": "retraining", "triggered_on": _clock(day, 4),
+                                                     "old_model_uri": previous_model["model_uri"], "new_model_uri": active["model_uri"]})
+                            updates.append({"on": str(day), "old": previous_model, "new": active})
                             streak = 0
                             trace.append({"event": "retrain", "day": str(day), "model_uri": active["model_uri"]})
                     if day <= date(2011, 9, 26):
@@ -345,14 +343,14 @@ def operate(database_url, source_dir, output_root, tracking_dir, *, initial_vers
             """, (replay_id,))
             if len(weeks) != 9:
                 raise ValueError("予測・評価が9週そろっていません")
-            updates = _read(database_url, "SELECT triggered_on,old_model,new_model FROM model_updates WHERE replay_id=%s ORDER BY triggered_on", (replay_id,))
             counts = {table: _read(database_url, f"SELECT COUNT(*) FROM {table}")[0][0]
                       for table in ["transactions", "daily_sales", "daily_batches", "weekly_forecasts",
-                                    "weekly_forecast_runs", "weekly_evaluations", "weekly_evaluation_items", "model_updates"]}
+                                    "weekly_forecast_runs", "weekly_evaluations", "operation_replays"]}
             result = {"replay_id": str(replay_id), "parent_run_id": parent.info.run_id,
                       "weekly": [{"week_start": str(w[0]), "scores": w[1], "bad_streak": w[2],
                                   "model": w[3], "prediction_id": w[4], "evaluation_run_id": w[5]} for w in weeks],
-                      "updates": [{"on": str(u[0]), "old": u[1], "new": u[2]} for u in updates],
+                      "updates": updates,
+                      "evaluated_forecasts": _read(database_url, "SELECT COUNT(*) FROM weekly_forecasts WHERE actual_quantity IS NOT NULL")[0][0],
                       "counts": counts, "timeline": trace}
             mlflow.log_dict(result, "summary.json")
             mlflow.log_artifact(str(Path(__file__)), "source")
@@ -370,12 +368,14 @@ if __name__ == "__main__":
     parser.add_argument("--output-root", type=Path, default=Path("02_model/results"))
     parser.add_argument("--tracking-dir", type=Path, default=Path("02_model/mlflow"))
     parser.add_argument("--mode", choices=["initial", "operations"], default="initial")
-    parser.add_argument("--initial-model-version", type=int, default=6)
+    parser.add_argument("--initial-model-version", type=int, help="初期処理のhandoffに保存された登録バージョン")
     parser.add_argument("--replay-key", default="august-september-2011")
     args = parser.parse_args()
     if args.mode == "initial":
         initialize(os.environ["DATABASE_URL"], args.source_dir, args.output_root, args.tracking_dir)
     else:
+        if args.initial_model_version is None:
+            parser.error("operationsでは--initial-model-versionを指定してください")
         result = operate(os.environ["DATABASE_URL"], args.source_dir, args.output_root, args.tracking_dir,
                          initial_version=args.initial_model_version, replay_key=args.replay_key)
         print(json.dumps({"replay_id": result["replay_id"], "counts": result["counts"]}, indent=2))

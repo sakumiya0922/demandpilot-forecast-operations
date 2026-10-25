@@ -1,3 +1,5 @@
+> 履歴資料です。旧方式・旧環境の記録を保存しています。現行手順は[LOCAL_RUN.md](../LOCAL_RUN.md)、現行設計は[ARCHITECTURE.md](../ARCHITECTURE.md)を参照してください。ここにある旧コマンド・旧件数は現行版の仕様ではありません。
+
 # STEP 1 — 旧学習コードの整理
 
 現在の `demandpilot-reorganized` に上書き展開してください。

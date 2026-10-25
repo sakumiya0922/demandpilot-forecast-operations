@@ -26,7 +26,6 @@ from training.training_data import FEATURE_COLUMNS
 TRAIN_END = pd.Timestamp("2011-05-31")
 VALIDATION_ORIGINS = tuple(pd.date_range("2011-06-05", periods=4, freq="W-SUN"))
 TEST_ORIGINS = tuple(pd.date_range("2011-07-03", periods=4, freq="W-SUN"))
-OPERATIONS_START = pd.Timestamp("2011-07-31")
 DEFAULT_EXPERIMENT = "demandpilot-weekly-operations"
 REGISTERED_MODEL = "DemandPilotWeeklyLightGBM"
 # 推論はnative LightGBMとmatrix()を使い、商品コードを学習時と同じカテゴリへ戻す。

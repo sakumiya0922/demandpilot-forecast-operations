@@ -1,3 +1,5 @@
+> 履歴資料です。旧方式・旧環境の記録を保存しています。現行手順は[LOCAL_RUN.md](../LOCAL_RUN.md)、現行設計は[ARCHITECTURE.md](../ARCHITECTURE.md)を参照してください。ここにある旧コマンド・旧件数は現行版の仕様ではありません。
+
 # MLflowの週次グラフとモデル履歴
 
 このパッチは、既存の`02_model/training/weekly_operations.py`を上書きし、`04_tests/`のテストを追加します。**過去のMLflow履歴は削除しません。** 実行すると別の親Runが生成されます。

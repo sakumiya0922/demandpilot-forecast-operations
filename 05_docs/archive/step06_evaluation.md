@@ -1,10 +1,12 @@
+> 履歴資料です。旧方式・旧環境の記録を保存しています。現行手順は[LOCAL_RUN.md](../LOCAL_RUN.md)、現行設計は[ARCHITECTURE.md](../ARCHITECTURE.md)を参照してください。ここにある旧コマンド・旧件数は現行版の仕様ではありません。
+
 # 06：予測と実績の評価
 
 保存済み予測を商品別の週次実績と照合し、LightGBMと直近7日ベースラインのMAE・WAPEを比較する。
 
-- [4週間の評価一覧](results/four_week_replay_57f6d5b6bf5a43ff856b67dbef4cac2e/report.md)
-- [品番別の振り返り・グラフ](results/four_week_replay_57f6d5b6bf5a43ff856b67dbef4cac2e/review_99c547152571470fa585a84a7434903c/report.md)
-- [初回週の評価](results/a8d1ac9b-a425-4146-888d-c8cc0227d1d4/report.md)
+- 4週間の評価一覧（当時の参照: `results/four_week_replay_57f6d5b6bf5a43ff856b67dbef4cac2e/report.md`）
+- 品番別の振り返り・グラフ（当時の参照: `results/four_week_replay_57f6d5b6bf5a43ff856b67dbef4cac2e/review_99c547152571470fa585a84a7434903c/report.md`）
+- 初回週の評価（当時の参照: `results/a8d1ac9b-a425-4146-888d-c8cc0227d1d4/report.md`）
 
 ## 実行方法
 
@@ -52,4 +54,4 @@ DBは読み取り専用である。実績を予測テーブルへ書き戻さず
 商品選定と分析に同じUCIデータセットを使っているため、これらは既知データによる運用再現である。
 将来の精度を保証する結果ではなく、欠品・販促・大口注文の原因も数量比較だけでは判断できない。
 
-テストの範囲と再現確認は[トップREADME](../README.md#テストと確認状況)を参照する。
+テストの範囲と再現確認はトップREADME（当時の参照: `../README.md#テストと確認状況`）を参照する。

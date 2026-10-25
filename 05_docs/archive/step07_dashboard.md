@@ -1,3 +1,5 @@
+> 履歴資料です。旧方式・旧環境の記録を保存しています。現行手順は[LOCAL_RUN.md](../LOCAL_RUN.md)、現行設計は[ARCHITECTURE.md](../ARCHITECTURE.md)を参照してください。ここにある旧コマンド・旧件数は現行版の仕様ではありません。
+
 # 07：需要予測ダッシュボード
 
 ## 起動
@@ -8,7 +10,7 @@
 docker compose -p demandpilot_reorganized --profile tools up -d dashboard
 ```
 
-[http://localhost:8503](http://localhost:8503)で開く。停止は`docker compose -p demandpilot_reorganized stop dashboard`である。
+http://localhost:8503（当時の参照: `http://localhost:8503`）で開く。停止は`docker compose -p demandpilot_reorganized stop dashboard`である。
 MLflowの画面も開く場合は`docker compose -p demandpilot_reorganized --profile tools up -d mlflow`を実行する。
 取り込み・学習・予測は別コマンドで行う。
 
@@ -54,13 +56,13 @@ TOP5と品番プルダウンは、絶対誤差順／WAPE順を共通で切り替
 
 `weekly_forecasts`から保存済み予測と特徴量、`daily_sales`から販売実績、MLflowから学習記録を読む。
 対象週の指標は既存の`compare_actuals()`で元CSV・明細・日次集計を照合した後に表示す。不一致・実績不足は「確認待ち」である。
-訂正で表示値が変わる場合がある。固定した評価記録は[step06](step06_evaluation.md)にある。
+訂正で表示値が変わる場合がある。固定した評価記録はstep06（当時の参照: `step06_evaluation.md`）にある。
 
 DB接続とMLflow SQLiteは読み取り専用、`01_data/storage/`も読み取り専用マウントである。
 画面の公開先はローカルの`127.0.0.1:8503`のみである。
 
 ## 検証
 
-全体テストと[初回からの再現確認](reproducibility/report.md)を実施している。
+全体テストと初回からの再現確認（当時の参照: `reproducibility/report.md`）を実施している。
 UIはStreamlit AppTestで標準選択イベントを送り、品番の同期・画面切り替え・数値・グラフを検査する。
 ブラウザでの実クリック・狭幅表示の目視確認は未実施である。

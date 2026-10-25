@@ -1,3 +1,5 @@
+> 履歴資料です。旧方式・旧環境の記録を保存しています。現行手順は[LOCAL_RUN.md](../LOCAL_RUN.md)、現行設計は[ARCHITECTURE.md](../ARCHITECTURE.md)を参照してください。ここにある旧コマンド・旧件数は現行版の仕様ではありません。
+
 # 05：週次予測
 
 日曜までの実績から、固定100品番の翌月曜〜日曜の販売数量を予測する。毎週月曜日に実行する想定である。
@@ -59,4 +61,4 @@ docker compose exec -T db psql -v ON_ERROR_STOP=1 -U demandpilot -d demandpilot 
   < 02_model/weekly/migrate_forecasts.sql
 ```
 
-[実績照合・評価](step06_evaluation.md) / [4週間の実行記録](../05_docs/evaluation_results/four_week_replay_57f6d5b6bf5a43ff856b67dbef4cac2e/report.md)
+実績照合・評価（当時の参照: `step06_evaluation.md`） / 4週間の実行記録（当時の参照: `../05_docs/evaluation_results/four_week_replay_57f6d5b6bf5a43ff856b67dbef4cac2e/report.md`）
